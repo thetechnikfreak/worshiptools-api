@@ -14,14 +14,15 @@ COPY cache.py .
 COPY custom_types.py .
 COPY worshiptools_api.py .
 
-# Create volume mount point for persistent database
-VOLUME ["/app/data"]
+# Create data directory for persistent database
+RUN mkdir -p /app/data
 
-# Expose Flask port
+# Expose port
 EXPOSE 5000
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
+ENV PORT=5000
 
-# Run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "main:app"]
+# Run the application with waitress (production WSGI server)
+CMD ["python", "main.py"]

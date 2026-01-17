@@ -186,8 +186,12 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
+    port = int(os.environ.get("PORT", 5000))
+    
     try:
-        app.run(debug=False, host='0.0.0.0', port=5000, use_reloader=False)
+        from waitress import serve
+        logging.info(f"Starting production server on port {port}...")
+        serve(app, host='0.0.0.0', port=port)
     except KeyboardInterrupt:
         logging.info("Server stopped by user")
     except Exception as e:

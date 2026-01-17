@@ -1,0 +1,23 @@
+# Environment variables
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# Database
+db.yaml
+data/
+
+# IDE
+.vscode/
+.idea/
+
+# Temp files
+*.log
+*.tmp

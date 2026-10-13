@@ -1,17 +1,12 @@
-import argparse
 import logging
 import os
-import sys
+from datetime import datetime
 
-import yaml
 from dotenv import load_dotenv
-from cache import Cacher, YamlDatabase
-from custom_types import Config
-from worshiptools_api import Worshiptools_API
-import io
 from flask import Flask, jsonify, request
 
-log_stream = io.StringIO()
+from cache import Cacher, YamlDatabase
+from worshiptools_api import Worshiptools_API
 
 load_dotenv()
 
@@ -26,13 +21,40 @@ wt_api = Worshiptools_API(
     os.environ.get("WORSHIPTOOLS_ACCOUNT_ID"),
 )
 
+_service_type_names = {}
+
+
+def get_service_type_names(force_refresh=False):
+    """Return a {type_id: name} dict, fetched once and cached in memory."""
+    global _service_type_names
+    if _service_type_names and not force_refresh:
+        return _service_type_names
+
+    response = wt_api.get("meta/service-types")
+    if isinstance(response, dict):
+        response = response.get("data") or response.get("docs") or []
+
+    _service_type_names = {t["id"]: t["name"] for t in response if "id" in t}
+    return _service_type_names
+
+
+def extract_services(response):
+    """Handle the different response structures of the WorshipTools API."""
+    if isinstance(response, dict):
+        services = response.get("docs") or response.get("data") or response.get("services") or []
+        if not services and "response" in response:
+            services = response["response"].get("docs", [])
+        return services
+    if isinstance(response, list):
+        return response
+    return []
+
 
 @app.route('/api/new-services', methods=['GET'])
 def get_new_services():
     try:
-        from datetime import datetime
         today = datetime.now().strftime('%Y-%m-%d')
-        
+
         params = {
             'past': 'hidden',
             'today': today,
@@ -40,47 +62,38 @@ def get_new_services():
             'rows': 50,
             'start': 0
         }
-        
+
         response = wt_api.get("service", params=params)
-        
-        # Handle different response structures
-        if isinstance(response, dict):
-            wt_services = response.get("docs") or response.get("data") or response.get("services") or []
-            if not wt_services and "response" in response:
-                wt_services = response["response"].get("docs", [])
-        elif isinstance(response, list):
-            wt_services = response
-        else:
-            wt_services = []
-        
-        filtered_services = [service for service in wt_services if service.get('type') == 'a7c123fb-bfa6-4824-8722-ade0ee562c2e']
-        
-        # Get previously seen service IDs
+        wt_services = extract_services(response)
+
+        # Resolve type IDs to names; refresh once if an unknown type shows up
+        type_names = get_service_type_names()
+        if any(s.get('type') not in type_names for s in wt_services):
+            type_names = get_service_type_names(force_refresh=True)
+
+        # Find new services (no type filter)
         seen_service_ids = set(cacher.get("seen_services") or [])
-        
-        # Find new services
-        new_services = [service for service in filtered_services if service['id'] not in seen_service_ids]
-        
-        # Format response
-        result = []
-        for service in new_services:
-            result.append({
-                "type": service.get('type'),
-                "name": service.get('name'),
-                "date": service.get('times')
-            })
-        
+        new_services = [s for s in wt_services if s['id'] not in seen_service_ids]
+
+        result = [
+            {
+                "type": type_names.get(s.get('type'), s.get('type')),  # falls back to the ID if unknown
+                "name": s.get('name'),
+                "date": s.get('times')
+            }
+            for s in new_services
+        ]
+
         # Update seen services
         if new_services:
-            all_service_ids = [service['id'] for service in filtered_services]
-            cacher.set("seen_services", all_service_ids)
-        
+            cacher.set("seen_services", [s['id'] for s in wt_services])
+
         return jsonify({
             "success": True,
             "count": len(result),
             "services": result
         })
-    
+
     except Exception as e:
         logging.error(f"Error fetching new services: {e}", exc_info=True)
         return jsonify({
@@ -93,9 +106,8 @@ def get_new_services():
 def debug_services():
     """Debug endpoint to see raw API response structure"""
     try:
-        from datetime import datetime
         today = datetime.now().strftime('%Y-%m-%d')
-        
+
         params = {
             'past': 'hidden',
             'today': today,
@@ -103,7 +115,7 @@ def debug_services():
             'rows': 10,
             'start': 0
         }
-        
+
         response = wt_api.get("service", params=params)
         return jsonify({
             "success": True,
@@ -128,50 +140,39 @@ def upload_files():
                 "success": False,
                 "error": "No files provided"
             }), 400
-        
+
         # Prepare form data for WorshipTools API
         files_to_upload = []
         form_data = {}
-        
+
         # Handle single file upload
         if 'file' in request.files:
             file = request.files['file']
             files_to_upload.append(('file', (file.filename, file.stream, file.content_type)))
-            
+
             # Add optional parameters
-            if request.form.get('stream'):
-                form_data['stream'] = request.form.get('stream')
-            if request.form.get('description'):
-                form_data['description'] = request.form.get('description')
-            if request.form.get('category1'):
-                form_data['category1'] = request.form.get('category1')
-            if request.form.get('category2'):
-                form_data['category2'] = request.form.get('category2')
-        
+            for key in ('stream', 'description', 'category1', 'category2'):
+                if request.form.get(key):
+                    form_data[key] = request.form.get(key)
+
         # Handle multiple files upload
         elif 'files[]' in request.files:
-            files = request.files.getlist('files[]')
-            for idx, file in enumerate(files):
+            for file in request.files.getlist('files[]'):
                 files_to_upload.append(('files[]', (file.filename, file.stream, file.content_type)))
-            
+
             # Add optional array parameters
-            if request.form.getlist('stream[]'):
-                form_data['stream[]'] = request.form.getlist('stream[]')
-            if request.form.getlist('description[]'):
-                form_data['description[]'] = request.form.getlist('description[]')
-            if request.form.getlist('category1[]'):
-                form_data['category1[]'] = request.form.getlist('category1[]')
-            if request.form.getlist('category2[]'):
-                form_data['category2[]'] = request.form.getlist('category2[]')
-        
+            for key in ('stream[]', 'description[]', 'category1[]', 'category2[]'):
+                if request.form.getlist(key):
+                    form_data[key] = request.form.getlist(key)
+
         # Upload to WorshipTools API
         response = wt_api.post("files", files=files_to_upload, data=form_data)
-        
+
         return jsonify({
             "success": True,
             "response": response
         })
-    
+
     except Exception as e:
         logging.error(f"Error uploading files: {e}", exc_info=True)
         return jsonify({
@@ -185,14 +186,17 @@ if __name__ == "__main__":
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     port = int(os.environ.get("PORT", 5000))
-    
+
     try:
         from waitress import serve
         logging.info(f"Starting production server on port {port}...")
         serve(app, host='0.0.0.0', port=port)
+    except ImportError:
+        logging.warning("waitress not installed, falling back to Flask dev server")
+        app.run(host='0.0.0.0', port=port)
     except KeyboardInterrupt:
         logging.info("Server stopped by user")
-    except Exception as e:
+    except Exception:
         logging.critical("Server error", exc_info=True)

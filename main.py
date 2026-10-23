@@ -131,54 +131,6 @@ def debug_services():
         }), 500
 
 
-@app.route('/api/upload-files', methods=['POST'])
-def upload_files():
-    try:
-        # Check if files are in the request
-        if 'file' not in request.files and 'files[]' not in request.files:
-            return jsonify({
-                "success": False,
-                "error": "No files provided"
-            }), 400
-
-        # Prepare form data for WorshipTools API
-        files_to_upload = []
-        form_data = {}
-
-        # Handle single file upload
-        if 'file' in request.files:
-            file = request.files['file']
-            files_to_upload.append(('file', (file.filename, file.stream, file.content_type)))
-
-            # Add optional parameters
-            for key in ('stream', 'description', 'category1', 'category2'):
-                if request.form.get(key):
-                    form_data[key] = request.form.get(key)
-
-        # Handle multiple files upload
-        elif 'files[]' in request.files:
-            for file in request.files.getlist('files[]'):
-                files_to_upload.append(('files[]', (file.filename, file.stream, file.content_type)))
-
-            # Add optional array parameters
-            for key in ('stream[]', 'description[]', 'category1[]', 'category2[]'):
-                if request.form.getlist(key):
-                    form_data[key] = request.form.getlist(key)
-
-        # Upload to WorshipTools API
-        response = wt_api.post("files", files=files_to_upload, data=form_data)
-
-        return jsonify({
-            "success": True,
-            "response": response
-        })
-
-    except Exception as e:
-        logging.error(f"Error uploading files: {e}", exc_info=True)
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
 
 
 if __name__ == "__main__":

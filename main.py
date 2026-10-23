@@ -1,7 +1,7 @@
 import logging
 import os
 from datetime import datetime
-
+import churchtools_sync
 from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 
@@ -24,6 +24,12 @@ wt_api = Worshiptools_API(
 _service_type_names = {}
 
 
+
+@app.route("/api/sync-churchtools", methods=["POST"])
+def sync_churchtools():
+    dry = request.args.get("dry_run") == "1"
+    return jsonify({"success": True, **churchtools_sync.sync(wt, dry_run=dry)})
+    
 def get_service_type_names(force_refresh=False):
     """Return a {type_id: name} dict, fetched once and cached in memory."""
     global _service_type_names

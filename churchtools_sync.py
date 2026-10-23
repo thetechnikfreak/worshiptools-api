@@ -1,22 +1,29 @@
 """
-ChurchTools -> WorshipTools: legt fuer ChurchTools-Events Gottesdienste in
-WorshipTools an (nur Erstellen, keine Lieder).
+ChurchTools -> WorshipTools: creates services in WorshipTools for ChurchTools
+events (create only, no songs).
 
-Umgebungsvariablen:
-  CT_URL                z.B. https://meinegemeinde.church.tools
-  CT_TOKEN              Login-Token (ChurchTools: /api/person/<id>/logintoken)
-  WT_SERVICE_TYPE_ID    UUID des WorshipTools-Gottesdiensttyps
-  CT_CALENDAR_IDS       optional, kommagetrennt, z.B. "2,5" (leer = alle)
-  CT_NAME_CONTAINS      optional, nur Events deren Name das enthaelt, z.B. "Gottesdienst"
-  SYNC_DAYS_AHEAD       optional, Standard 60
-  SYNC_TIMEZONE         optional, Standard Europe/Berlin
-  SYNC_STATE_FILE       optional, Standard /data/sync_state.json (als Volume mounten!)
+Rules:
+  * Only events from the calendar named "Gottesdienst" are synced
+    (CT_CALENDAR_NAMES, comma separated). If that calendar cannot be found,
+    NOTHING is synced (fail closed).
+  * The WorshipTools service type is looked up by NAME: the event template
+    name (or, as a fallback, the event name) is matched against the names in
+    WorshipTools' meta/service-types. WT_SERVICE_TYPE_ID is only a fallback.
+
+Environment variables:
+  CT_URL                e.g. https://mychurch.church.tools
+  CT_TOKEN              ChurchTools login token (/api/person/<id>/logintoken)
+  CT_CALENDAR_NAMES     default "Gottesdienst"
+  WT_SERVICE_TYPE_ID    optional fallback UUID if no name matches
+  SYNC_DAYS_AHEAD       default 60
+  SYNC_TIMEZONE         default Europe/Berlin
+  SYNC_STATE_FILE       default /data/sync_state.json (mount as a volume!)
   WORSHIPTOOLS_EMAIL / WORSHIPTOOLS_PASSWORD / WORSHIPTOOLS_ACCOUNT_ID
-                        (oder WT_EMAIL / WT_PASSWORD / WT_ACCOUNT_ID)
+                        (or WT_EMAIL / WT_PASSWORD / WT_ACCOUNT_ID)
 
-Aufruf:
-  python churchtools_sync.py --dry-run   # zeigt nur, was angelegt wuerde
-  python churchtools_sync.py             # legt neue Gottesdienste an
+Usage:
+  python churchtools_sync.py --dry-run   # only shows what would be created
+  python churchtools_sync.py             # creates new services
 """
 import json
 import os
@@ -28,13 +35,21 @@ import requests
 
 CT_URL = os.environ.get("CT_URL", "").rstrip("/")
 CT_TOKEN = os.environ.get("CT_TOKEN", "")
-WT_SERVICE_TYPE_ID = os.environ.get("WT_SERVICE_TYPE_ID", "")
-CT_CALENDAR_IDS = {c.strip() for c in os.environ.get("CT_CALENDAR_IDS", "").split(",") if c.strip()}
-CT_NAME_CONTAINS = os.environ.get("CT_NAME_CONTAINS", "").strip().lower()
+CT_CALENDAR_NAMES = {
+    c.strip().lower()
+    for c in os.environ.get("CT_CALENDAR_NAMES", "Gottesdienst").split(",")
+    if c.strip()
+}
+WT_FALLBACK_TYPE_ID = os.environ.get("WT_SERVICE_TYPE_ID", "")
 DAYS_AHEAD = int(os.environ.get("SYNC_DAYS_AHEAD", "60"))
 TZ = ZoneInfo(os.environ.get("SYNC_TIMEZONE", "Europe/Berlin"))
 STATE_FILE = os.environ.get("SYNC_STATE_FILE", "/data/sync_state.json")
 
+# Fields where ChurchTools might carry the event template name (first hit wins).
+TEMPLATE_FIELDS = ("eventTemplate", "eventTemplateName", "template", "templateName")
+
+
+# ---------- state ----------
 
 def load_state():
     try:
@@ -52,15 +67,11 @@ def save_state(state):
     os.replace(tmp, STATE_FILE)
 
 
-def fetch_ct_events():
-    """Holt die Events der naechsten DAYS_AHEAD Tage aus ChurchTools."""
-    today = datetime.now(TZ).date()
-    params = {
-        "from": today.isoformat(),
-        "to": (today + timedelta(days=DAYS_AHEAD)).isoformat(),
-    }
+# ---------- ChurchTools ----------
+
+def _ct_get(path, params=None):
     resp = requests.get(
-        f"{CT_URL}/api/events",
+        f"{CT_URL}/api/{path}",
         params=params,
         headers={"Authorization": f"Login {CT_TOKEN}", "Accept": "application/json"},
         timeout=30,
@@ -69,37 +80,116 @@ def fetch_ct_events():
     return resp.json().get("data", [])
 
 
-def event_calendar_id(ev):
+def resolve_calendar_ids():
+    """Looks up the IDs of the allowed calendars (e.g. 'Gottesdienst') by name."""
+    ids = set()
+    for cal in _ct_get("calendars"):
+        name = (cal.get("name") or cal.get("title") or "").strip().lower()
+        if name in CT_CALENDAR_NAMES:
+            ids.add(str(cal.get("id")))
+    return ids
+
+
+def fetch_ct_events():
+    today = datetime.now(TZ).date()
+    return _ct_get("events", {
+        "from": today.isoformat(),
+        "to": (today + timedelta(days=DAYS_AHEAD)).isoformat(),
+    })
+
+
+def event_in_allowed_calendar(ev, allowed_ids):
     cal = ev.get("calendar") or {}
-    return str(cal.get("domainIdentifier") or cal.get("id") or "")
+    cal_id = str(cal.get("domainIdentifier") or cal.get("id") or "")
+    if cal_id and cal_id in allowed_ids:
+        return True
+    cal_name = (cal.get("name") or cal.get("title") or cal.get("caption") or "").strip().lower()
+    return bool(cal_name) and cal_name in CT_CALENDAR_NAMES
 
 
-def event_matches(ev):
-    if CT_CALENDAR_IDS and event_calendar_id(ev) not in CT_CALENDAR_IDS:
-        return False
-    name = (ev.get("name") or ev.get("caption") or "").lower()
-    if CT_NAME_CONTAINS and CT_NAME_CONTAINS not in name:
-        return False
-    return True
+def event_template_name(ev):
+    for field in TEMPLATE_FIELDS:
+        val = ev.get(field)
+        if isinstance(val, dict):
+            val = val.get("name") or val.get("title") or val.get("caption")
+        if val:
+            return str(val).strip()
+    return ""
 
 
 def to_local_time(iso_str):
-    """ChurchTools liefert UTC (z.B. 2026-10-25T08:00:00Z).
-    WorshipTools speichert lokale Zeit ohne Zeitzone (2026-10-25T10:00:00)."""
+    """ChurchTools sends UTC (2026-10-25T08:00:00Z); WorshipTools stores local
+    time without timezone (2026-10-25T10:00:00)."""
     dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(TZ).strftime("%Y-%m-%dT%H:%M:%S")
 
 
+# ---------- WorshipTools service types ----------
+
+def load_service_types(wt):
+    """Returns {lowercase name: service type id} from meta/service-types."""
+    resp = wt.get("meta/service-types")
+    types = {}
+
+    def add(fallback_id, obj):
+        name = obj.get("name") or obj.get("title") or obj.get("label")
+        sid = obj.get("id") or obj.get("uuid") or fallback_id
+        if name and sid:
+            types[str(name).strip().lower()] = str(sid)
+
+    if isinstance(resp, dict):
+        for key in ("data", "docs", "serviceTypes", "types", "items"):
+            if isinstance(resp.get(key), list):
+                resp = resp[key]
+                break
+    if isinstance(resp, list):
+        for obj in resp:
+            if isinstance(obj, dict):
+                add(None, obj)
+    elif isinstance(resp, dict):
+        for key, obj in resp.items():
+            if isinstance(obj, dict):
+                add(key, obj)
+    return types
+
+
+def resolve_service_type(types, template_name, event_name):
+    """Template name first, then event name. Exact match, then 'contains'."""
+    for candidate in (template_name, event_name):
+        c = (candidate or "").strip().lower()
+        if not c:
+            continue
+        if c in types:
+            return types[c]
+        for type_name, type_id in types.items():
+            if type_name in c or c in type_name:
+                return type_id
+    return WT_FALLBACK_TYPE_ID or None
+
+
+# ---------- sync ----------
+
 def sync(wt, dry_run=False):
-    """wt = Worshiptools_API-Instanz. Gibt eine Zusammenfassung zurueck."""
-    state = load_state()
+    """wt = Worshiptools_API instance. Returns a summary dict."""
     result = {"created": [], "skipped": 0, "filtered": 0, "errors": []}
+
+    allowed_ids = resolve_calendar_ids()
+    if not allowed_ids:
+        result["errors"].append({
+            "error": f"calendar {sorted(CT_CALENDAR_NAMES)} not found in ChurchTools - nothing synced"
+        })
+        return result
+
+    state = load_state()
+    types = load_service_types(wt)
+    result["service_types_found"] = sorted(types.keys())
 
     for ev in fetch_ct_events():
         ct_id = str(ev.get("id"))
-        if not event_matches(ev):
+
+        if not event_in_allowed_calendar(ev, allowed_ids):
             result["filtered"] += 1
             continue
         if ct_id in state["events"]:
@@ -107,31 +197,39 @@ def sync(wt, dry_run=False):
             continue
 
         name = ev.get("name") or ev.get("caption") or "Gottesdienst"
+        template = event_template_name(ev)
         start = ev.get("startDate")
         if not start:
-            result["errors"].append({"ct_id": ct_id, "error": "kein startDate"})
+            result["errors"].append({"ct_id": ct_id, "name": name, "error": "no startDate"})
             continue
+
+        type_id = resolve_service_type(types, template, name)
+        if not type_id:
+            result["errors"].append({
+                "ct_id": ct_id, "name": name, "template": template,
+                "error": "no matching WorshipTools service type",
+            })
+            continue
+
         local_time = to_local_time(start)
+        entry = {"ct_id": ct_id, "name": name, "template": template or None,
+                 "type_id": type_id, "time": local_time}
 
         if dry_run:
-            result["created"].append({"ct_id": ct_id, "name": name, "time": local_time, "dry_run": True})
+            entry["dry_run"] = True
+            result["created"].append(entry)
             continue
 
         try:
-            created = wt.create_service(
-                service_type_id=WT_SERVICE_TYPE_ID,
-                times=[local_time],
-                name=name,
-            )
+            created = wt.create_service(service_type_id=type_id, times=[local_time], name=name)
             state["events"][ct_id] = {
-                "wt_id": created["id"],
-                "name": name,
-                "time": local_time,
+                "wt_id": created["id"], "name": name, "time": local_time,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
-            save_state(state)  # sofort speichern, damit nichts doppelt angelegt wird
-            result["created"].append({"ct_id": ct_id, "name": name, "time": local_time, "wt_id": created["id"]})
-        except Exception as e:  # ein fehlerhaftes Event soll die anderen nicht blockieren
+            save_state(state)  # save right away so nothing is created twice
+            entry["wt_id"] = created["id"]
+            result["created"].append(entry)
+        except Exception as e:  # one broken event must not block the others
             result["errors"].append({"ct_id": ct_id, "name": name, "error": str(e)})
 
     return result
@@ -145,9 +243,9 @@ def _env(*names):
 
 
 if __name__ == "__main__":
-    for var in ("CT_URL", "CT_TOKEN", "WT_SERVICE_TYPE_ID"):
+    for var in ("CT_URL", "CT_TOKEN"):
         if not os.environ.get(var):
-            sys.exit(f"Umgebungsvariable {var} fehlt")
+            sys.exit(f"Environment variable {var} is missing")
 
     from worshiptools_api import Worshiptools_API
 

@@ -90,21 +90,50 @@ def resolve_calendar_ids():
     return ids
 
 
-def fetch_ct_events():
+def _date_range():
     today = datetime.now(TZ).date()
-    return _ct_get("events", {
+    return {
         "from": today.isoformat(),
         "to": (today + timedelta(days=DAYS_AHEAD)).isoformat(),
-    })
+    }
 
 
-def event_in_allowed_calendar(ev, allowed_ids):
+def fetch_ct_events():
+    return _ct_get("events", _date_range())
+
+
+def fetch_calendar_appointment_ids(calendar_ids):
+    """IDs of all appointments in the allowed calendars (GET /calendars/{id}/appointments).
+
+    An event links to its appointment via appointmentId. This makes the calendar
+    filter reliable even if the event itself carries no calendar object.
+    Returns (ids, warning or None).
+    """
+    ids = set()
+    try:
+        for cal_id in calendar_ids:
+            for appt in _ct_get(f"calendars/{cal_id}/appointments", _date_range()):
+                # Series entries may be wrapped as {"base": {...}, "calculated": {...}}
+                appt_id = appt.get("id") or (appt.get("base") or {}).get("id")
+                if appt_id is not None:
+                    ids.add(str(appt_id))
+    except requests.RequestException as e:
+        return ids, f"could not load appointments of the calendar ({e}); using event.calendar only"
+    return ids, None
+
+
+def event_in_allowed_calendar(ev, allowed_ids, allowed_appointment_ids=frozenset()):
+    # 1) calendar object on the event (Event.calendar: domainIdentifier + title)
     cal = ev.get("calendar") or {}
     cal_id = str(cal.get("domainIdentifier") or cal.get("id") or "")
     if cal_id and cal_id in allowed_ids:
         return True
     cal_name = (cal.get("name") or cal.get("title") or cal.get("caption") or "").strip().lower()
-    return bool(cal_name) and cal_name in CT_CALENDAR_NAMES
+    if cal_name and cal_name in CT_CALENDAR_NAMES:
+        return True
+    # 2) fallback: the event's appointment belongs to an allowed calendar
+    appt_id = ev.get("appointmentId")
+    return appt_id is not None and str(appt_id) in allowed_appointment_ids
 
 
 def event_template_name(ev):
@@ -182,6 +211,10 @@ def sync(wt, dry_run=False):
         })
         return result
 
+    allowed_appointment_ids, warning = fetch_calendar_appointment_ids(allowed_ids)
+    if warning:
+        result["warning"] = warning
+
     state = load_state()
     types = load_service_types(wt)
     result["service_types_found"] = sorted(types.keys())
@@ -189,7 +222,7 @@ def sync(wt, dry_run=False):
     for ev in fetch_ct_events():
         ct_id = str(ev.get("id"))
 
-        if not event_in_allowed_calendar(ev, allowed_ids):
+        if ev.get("isCanceled") or not event_in_allowed_calendar(ev, allowed_ids, allowed_appointment_ids):
             result["filtered"] += 1
             continue
         if ct_id in state["events"]:

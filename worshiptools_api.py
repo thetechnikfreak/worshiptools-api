@@ -207,7 +207,7 @@ class Worshiptools_API:
             resp = requests.get(url, headers={"Authorization": f"Bearer {fb_token}"})
         resp.raise_for_status()
         return resp.json()
-@staticmethod
+    @staticmethod
     def _to_firestore_value(val):
         """Konvertiert einen Python-Wert in das Firestore REST API Value-Format."""
         if val is None:

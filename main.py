@@ -155,7 +155,75 @@ def inspect_service():
     except Exception as e:
         logging.error(f"Inspect error: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
-        
+
+@app.route('/api/create-service', methods=['POST'])
+def create_service():
+    """
+    Erstellt einen neuen Service in WorshipTools.
+    Erwartet JSON Body:
+    {
+        "type": "Gottesdienst" (oder die Service-Type UUID),
+        "times": ["2026-10-25T09:00:00Z"] (oder einzelner String "date"),
+        "name": "Optionaler Titel"
+    }
+    """
+    try:
+        data = request.get_json(force=True)
+        if not data:
+            return jsonify({"success": False, "error": "JSON body required"}), 400
+
+        raw_type = data.get("type")
+        name = data.get("name")
+        times = data.get("times") or ([data["date"]] if data.get("date") else None)
+        extra_fields = data.get("extra_fields")
+
+        if not raw_type or not times:
+            return jsonify({
+                "success": False,
+                "error": "Both 'type' (name or UUID) and 'times' (or 'date') are required."
+            }), 400
+
+        if isinstance(times, str):
+            times = [times]
+
+        # Service-Type Name automatisch in die WorshipTools Type-UUID auflösen
+        type_names = get_service_type_names()  # {type_id: name}
+        name_to_id = {v.lower(): k for k, v in type_names.items()}
+
+        if raw_type in type_names:
+            service_type_id = raw_type
+        elif raw_type.lower() in name_to_id:
+            service_type_id = name_to_id[raw_type.lower()]
+        else:
+            # Einmal Cache refreshen, falls der Service-Typ neu angelegt wurde
+            type_names = get_service_type_names(force_refresh=True)
+            name_to_id = {v.lower(): k for k, v in type_names.items()}
+            service_type_id = name_to_id.get(raw_type.lower(), raw_type)
+
+        created = wt_api.create_service(
+            service_type_id=service_type_id,
+            times=times,
+            name=name,
+            extra_fields=extra_fields
+        )
+
+        # Optional: Neue Service-ID direkt in den seen_services Cache eintragen,
+        # damit /api/new-services ihn nicht als extern neu angelegt doppelt meldet
+        seen = set(cacher.get("seen_services") or [])
+        seen.add(created["id"])
+        cacher.set("seen_services", list(seen))
+
+        return jsonify({
+            "success": True,
+            "service": created
+        }), 201
+
+    except Exception as e:
+        logging.error(f"Error creating service: {e}", exc_info=True)
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,

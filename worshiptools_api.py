@@ -226,17 +226,12 @@ class Worshiptools_API:
             return {"mapValue": {"fields": {k: Worshiptools_API._to_firestore_value(v) for k, v in val.items()}}}
         return {"stringValue": str(val)}
 
-    def create_service(self, service_type_id: str, times: list[str], name: str = None, extra_fields: dict = None):
-        """
-        Erstellt einen neuen Gottesdienst in WorshipTools.
-        Versucht zuerst ein bestehendes Firestore-Dokument als Schema-Vorlage zu klonen,
-        damit alle account-spezifischen Pflichtfelder exakt stimmen.
-        """
+    def create_service(self, service_type_id, times, name=None, extra_fields=None):
+        """Erstellt einen neuen Gottesdienst in WorshipTools via Firestore."""
         service_id = str(uuid.uuid4())
         now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
-        # 1. Versuche ein existierendes Service-Dokument als Vorlage zu laden
         template_fields = {}
         try:
             search_resp = self.get("service", params={"rows": 1, "start": 0, "sort": "times_ss desc"})
@@ -250,10 +245,8 @@ class Worshiptools_API:
         except Exception as e:
             print(f"Could not load template service, using default schema: {e}")
 
-        # 2. Basis-Felder für den neuen Service im Firestore-Format aufbauen
         fields = {}
         if template_fields:
-            # Übernehme Struktur aus Vorlage, aber leere Planungs-Listen (Songs/Items/Teams)
             for k, v in template_fields.items():
                 if k in ("items", "plan", "order", "songs", "notes", "files"):
                     fields[k] = {"arrayValue": {"values": []}}
@@ -265,15 +258,12 @@ class Worshiptools_API:
                 else:
                     fields[k] = v
 
-        # 3. Überschreibe die Kern-Eigenschaften des neuen Gottesdienstes
         fields["id"] = self._to_firestore_value(service_id)
         fields["type"] = self._to_firestore_value(service_type_id)
         fields["name"] = self._to_firestore_value(name if name else "")
 
-        # Datums-/Zeit-Felder (passt sich an Vorlage an, falls z.B. Integer-Timestamps oder Strings genutzt werden)
         fields["times"] = self._to_firestore_value(times)
         if "mod" in template_fields or not template_fields:
-            # Prüfe ob 'mod' in der Vorlage ein Integer (Millisekunden) oder String ist
             if "mod" in template_fields and "integerValue" in template_fields["mod"]:
                 fields["mod"] = {"integerValue": str(now_ms)}
             else:
@@ -285,12 +275,10 @@ class Worshiptools_API:
             else:
                 fields["created"] = self._to_firestore_value(now_iso)
 
-        # Optionale Zusatzfelder überschreiben
         if extra_fields:
             for k, v in extra_fields.items():
                 fields[k] = self._to_firestore_value(v)
 
-        # 4. In Firestore unter accounts/{account_id}/services/{service_id} speichern
         fb_token = self.get_firebase_id_token()
         url = f"{self.firestore_base_url}/accounts/{self.account_id}/services?documentId={service_id}"
         headers = {

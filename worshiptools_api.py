@@ -209,9 +209,9 @@ class Worshiptools_API:
         return resp.json()
     @staticmethod
     def _to_firestore_value(val):
-        """Konvertiert einen Python-Wert in das Firestore REST API Value-Format."""
+        """Convert a Python value to Firestore REST API value format."""
         if val is None:
-            return {"nullValue": None}
+            return {"nullValue": "NULL_VALUE"}
         if isinstance(val, bool):
             return {"booleanValue": val}
         if isinstance(val, int):
@@ -226,77 +226,69 @@ class Worshiptools_API:
             return {"mapValue": {"fields": {k: Worshiptools_API._to_firestore_value(v) for k, v in val.items()}}}
         return {"stringValue": str(val)}
 
-    def create_service(self, service_type_id, times, name=None, extra_fields=None):
-        """Erstellt einen neuen Gottesdienst in WorshipTools via Firestore."""
+    @staticmethod
+    def _normalize_time(t):
+        """The app stores local time without timezone: 2026-10-24T08:00:00"""
+        if isinstance(t, dict):
+            t = t.get("time", "")
+        t = str(t).strip()
+        if len(t) == 10:            # date only
+            t += "T00:00:00"
+        return t.rstrip("Z")[:19]
+
+    def create_service(self, service_type_id, times, name=None, extra_fields=None, notes=""):
+        """Create a service the same way the web app does (cuelists collection)."""
         service_id = str(uuid.uuid4())
-        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        now = datetime.now(timezone.utc)
+        now_ts = now.strftime("%Y-%m-%dT%H:%M:%S.%f") + "000Z"
 
-        template_fields = {}
-        try:
-            search_resp = self.get("service", params={"rows": 1, "start": 0, "sort": "times_ss desc"})
-            docs = search_resp.get("docs") or search_resp.get("data") or []
-            if not docs and "response" in search_resp:
-                docs = search_resp["response"].get("docs", [])
-            if docs:
-                sample_id = docs[0]["id"]
-                sample_doc = self.get_firestore_document(f"services/{sample_id}")
-                template_fields = sample_doc.get("fields", {})
-        except Exception as e:
-            print(f"Could not load template service, using default schema: {e}")
+        if isinstance(times, str):
+            times = [times]
+        time_entries = [{"time": self._normalize_time(t), "type": None} for t in times]
 
-        fields = {}
-        if template_fields:
-            for k, v in template_fields.items():
-                if k in ("items", "plan", "order", "songs", "notes", "files"):
-                    fields[k] = {"arrayValue": {"values": []}}
-                elif k in ("teams", "schedules", "assignments", "volunteers"):
-                    if "mapValue" in v:
-                        fields[k] = {"mapValue": {"fields": {}}}
-                    else:
-                        fields[k] = {"arrayValue": {"values": []}}
-                else:
-                    fields[k] = v
+        fb_token = self.get_firebase_id_token()
 
-        fields["id"] = self._to_firestore_value(service_id)
-        fields["type"] = self._to_firestore_value(service_type_id)
-        fields["name"] = self._to_firestore_value(name if name else "")
+        user_id = getattr(self, "firebase_uid", None)
+        user_name = os.environ.get("WORSHIPTOOLS_USER_NAME", "API")
 
-        fields["times"] = self._to_firestore_value(times)
-        if "mod" in template_fields or not template_fields:
-            if "mod" in template_fields and "integerValue" in template_fields["mod"]:
-                fields["mod"] = {"integerValue": str(now_ms)}
-            else:
-                fields["mod"] = self._to_firestore_value(now_iso)
-
-        if "created" in template_fields:
-            if "integerValue" in template_fields["created"]:
-                fields["created"] = {"integerValue": str(now_ms)}
-            else:
-                fields["created"] = self._to_firestore_value(now_iso)
+        fields = {
+            "client": self._to_firestore_value({"id": None, "name": "Planning"}),
+            "data": self._to_firestore_value({
+                "cuelist_created": int(now.timestamp()),
+                "cuelist_options": {"date": ""},
+                "cuelist_status": 0,
+                "cuelist_tags": [],
+                "cuelist_title": "",
+                "cues": [],
+                "songMeta": {},
+            }),
+            "mod": {"timestampValue": now_ts},
+            "post": {"timestampValue": now_ts},
+            "name": self._to_firestore_value(name or ""),
+            "service": self._to_firestore_value({
+                "notes": notes,
+                "times": time_entries,
+                "type": service_type_id,
+            }),
+            "user": self._to_firestore_value({"id": user_id, "name": user_name}),
+        }
 
         if extra_fields:
             for k, v in extra_fields.items():
                 fields[k] = self._to_firestore_value(v)
 
-        fb_token = self.get_firebase_id_token()
-        url = f"{self.firestore_base_url}/accounts/{self.account_id}/services?documentId={service_id}"
-        headers = {
-            "Authorization": f"Bearer {fb_token}",
-            "Content-Type": "application/json"
-        }
-
+        url = f"{self.firestore_base_url}/accounts/{self.account_id}/cuelists?documentId={service_id}"
+        headers = {"Authorization": f"Bearer {fb_token}", "Content-Type": "application/json"}
         resp = requests.post(url, headers=headers, json={"fields": fields})
         if resp.status_code == 401:
-            fb_token = self.get_firebase_id_token(force_refresh=True)
-            headers["Authorization"] = f"Bearer {fb_token}"
+            headers["Authorization"] = f"Bearer {self.get_firebase_id_token(force_refresh=True)}"
             resp = requests.post(url, headers=headers, json={"fields": fields})
-
         resp.raise_for_status()
+
         return {
             "id": service_id,
             "type": service_type_id,
             "name": name,
-            "times": times,
-            "firestore_response": resp.json()
+            "times": [e["time"] for e in time_entries],
+            "firestore_response": resp.json(),
         }

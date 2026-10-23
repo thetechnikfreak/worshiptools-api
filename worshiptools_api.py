@@ -207,3 +207,108 @@ class Worshiptools_API:
             resp = requests.get(url, headers={"Authorization": f"Bearer {fb_token}"})
         resp.raise_for_status()
         return resp.json()
+@staticmethod
+    def _to_firestore_value(val):
+        """Konvertiert einen Python-Wert in das Firestore REST API Value-Format."""
+        if val is None:
+            return {"nullValue": None}
+        if isinstance(val, bool):
+            return {"booleanValue": val}
+        if isinstance(val, int):
+            return {"integerValue": str(val)}
+        if isinstance(val, float):
+            return {"doubleValue": val}
+        if isinstance(val, str):
+            return {"stringValue": val}
+        if isinstance(val, list):
+            return {"arrayValue": {"values": [Worshiptools_API._to_firestore_value(v) for v in val]}}
+        if isinstance(val, dict):
+            return {"mapValue": {"fields": {k: Worshiptools_API._to_firestore_value(v) for k, v in val.items()}}}
+        return {"stringValue": str(val)}
+
+    def create_service(self, service_type_id: str, times: list[str], name: str = None, extra_fields: dict = None):
+        """
+        Erstellt einen neuen Gottesdienst in WorshipTools.
+        Versucht zuerst ein bestehendes Firestore-Dokument als Schema-Vorlage zu klonen,
+        damit alle account-spezifischen Pflichtfelder exakt stimmen.
+        """
+        service_id = str(uuid.uuid4())
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+        # 1. Versuche ein existierendes Service-Dokument als Vorlage zu laden
+        template_fields = {}
+        try:
+            search_resp = self.get("service", params={"rows": 1, "start": 0, "sort": "times_ss desc"})
+            docs = search_resp.get("docs") or search_resp.get("data") or []
+            if not docs and "response" in search_resp:
+                docs = search_resp["response"].get("docs", [])
+            if docs:
+                sample_id = docs[0]["id"]
+                sample_doc = self.get_firestore_document(f"services/{sample_id}")
+                template_fields = sample_doc.get("fields", {})
+        except Exception as e:
+            print(f"Could not load template service, using default schema: {e}")
+
+        # 2. Basis-Felder für den neuen Service im Firestore-Format aufbauen
+        fields = {}
+        if template_fields:
+            # Übernehme Struktur aus Vorlage, aber leere Planungs-Listen (Songs/Items/Teams)
+            for k, v in template_fields.items():
+                if k in ("items", "plan", "order", "songs", "notes", "files"):
+                    fields[k] = {"arrayValue": {"values": []}}
+                elif k in ("teams", "schedules", "assignments", "volunteers"):
+                    if "mapValue" in v:
+                        fields[k] = {"mapValue": {"fields": {}}}
+                    else:
+                        fields[k] = {"arrayValue": {"values": []}}
+                else:
+                    fields[k] = v
+
+        # 3. Überschreibe die Kern-Eigenschaften des neuen Gottesdienstes
+        fields["id"] = self._to_firestore_value(service_id)
+        fields["type"] = self._to_firestore_value(service_type_id)
+        fields["name"] = self._to_firestore_value(name if name else "")
+
+        # Datums-/Zeit-Felder (passt sich an Vorlage an, falls z.B. Integer-Timestamps oder Strings genutzt werden)
+        fields["times"] = self._to_firestore_value(times)
+        if "mod" in template_fields or not template_fields:
+            # Prüfe ob 'mod' in der Vorlage ein Integer (Millisekunden) oder String ist
+            if "mod" in template_fields and "integerValue" in template_fields["mod"]:
+                fields["mod"] = {"integerValue": str(now_ms)}
+            else:
+                fields["mod"] = self._to_firestore_value(now_iso)
+
+        if "created" in template_fields:
+            if "integerValue" in template_fields["created"]:
+                fields["created"] = {"integerValue": str(now_ms)}
+            else:
+                fields["created"] = self._to_firestore_value(now_iso)
+
+        # Optionale Zusatzfelder überschreiben
+        if extra_fields:
+            for k, v in extra_fields.items():
+                fields[k] = self._to_firestore_value(v)
+
+        # 4. In Firestore unter accounts/{account_id}/services/{service_id} speichern
+        fb_token = self.get_firebase_id_token()
+        url = f"{self.firestore_base_url}/accounts/{self.account_id}/services?documentId={service_id}"
+        headers = {
+            "Authorization": f"Bearer {fb_token}",
+            "Content-Type": "application/json"
+        }
+
+        resp = requests.post(url, headers=headers, json={"fields": fields})
+        if resp.status_code == 401:
+            fb_token = self.get_firebase_id_token(force_refresh=True)
+            headers["Authorization"] = f"Bearer {fb_token}"
+            resp = requests.post(url, headers=headers, json={"fields": fields})
+
+        resp.raise_for_status()
+        return {
+            "id": service_id,
+            "type": service_type_id,
+            "name": name,
+            "times": times,
+            "firestore_response": resp.json()
+        }

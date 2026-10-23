@@ -13,6 +13,7 @@ COPY main.py .
 COPY cache.py .
 COPY custom_types.py .
 COPY worshiptools_api.py .
+COPY churchtools_sync.py .
 
 # Create data directory for persistent database
 RUN mkdir -p /app/data

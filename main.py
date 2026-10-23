@@ -1,5 +1,6 @@
 import logging
 import os
+import threading, time
 from datetime import datetime
 import churchtools_sync
 from dotenv import load_dotenv
@@ -230,6 +231,15 @@ def create_service():
             "success": False,
             "error": str(e)
         }), 500
+def _ct_loop():
+    while True:
+        try:
+            churchtools_sync.sync(wt)
+        except Exception as e:
+            print(f"ChurchTools-Sync Fehler: {e}")
+        time.sleep(900)
+
+threading.Thread(target=_ct_loop, daemon=True).start()
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,

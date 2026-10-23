@@ -131,8 +131,31 @@ def debug_services():
         }), 500
 
 
-
-
+@app.route('/api/inspect-service', methods=['GET'])
+def inspect_service():
+    """Holt den neuesten Service aus der API und liest dessen exaktes Firestore-Dokument aus."""
+    try:
+        # 1. Einen existierenden Service über die normale API finden
+        services_resp = wt_api.get("service", params={'rows': 1, 'start': 0, 'sort': 'times_ss desc'})
+        services = extract_services(services_resp)
+        
+        if not services:
+            return jsonify({"error": "No services found"}), 404
+            
+        sample_service_id = services[0]["id"]
+        
+        # 2. Das zugehörige Firestore-Dokument abrufen
+        firestore_doc = wt_api.get_firestore_document(f"services/{sample_service_id}")
+        
+        return jsonify({
+            "service_id": sample_service_id,
+            "solr_summary": services[0],
+            "firestore_document": firestore_doc
+        })
+    except Exception as e:
+        logging.error(f"Inspect error: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+        
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,

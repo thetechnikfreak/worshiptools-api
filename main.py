@@ -29,7 +29,7 @@ _service_type_names = {}
 @app.route("/api/sync-churchtools", methods=["POST"])
 def sync_churchtools():
     dry = request.args.get("dry_run") == "1"
-    return jsonify({"success": True, **churchtools_sync.sync(wt, dry_run=dry)})
+    return jsonify({"success": True, **churchtools_sync.sync(wt_api, dry_run=dry)})
     
 def get_service_type_names(force_refresh=False):
     """Return a {type_id: name} dict, fetched once and cached in memory."""
@@ -234,7 +234,7 @@ def create_service():
 def _ct_loop():
     while True:
         try:
-            churchtools_sync.sync(wt)
+            churchtools_sync.sync(wt_api)
         except Exception as e:
             print(f"ChurchTools-Sync Fehler: {e}")
         time.sleep(900)

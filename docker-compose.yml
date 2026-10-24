@@ -5,9 +5,25 @@ services:
     restart: unless-stopped
     ports:
       - "5000:5000"
+    # Option 1: Optional .env Datei (wird geladen, falls vorhanden)
     env_file:
-      - .env
+      - path: .env
+        required: false
+    # Option 2: Umgebungsvariablen direkt hier festlegen
     environment:
+      # ChurchTools
+      - CT_URL=${CT_URL:-https://your-church.church.tools}
+      - CT_TOKEN=${CT_TOKEN:-your_token_here}
+
+      # WorshipTools
+      - WORSHIPTOOLS_EMAIL=${WORSHIPTOOLS_EMAIL:-admin@your-church.org}
+      - WORSHIPTOOLS_PASSWORD=${WORSHIPTOOLS_PASSWORD:-your_password}
+      - WORSHIPTOOLS_ACCOUNT_ID=${WORSHIPTOOLS_ACCOUNT_ID:-your_account_uuid}
+
+      # API Sicherheit (optional)
+      - SYNC_API_KEY=${SYNC_API_KEY:-}
+
+      # System-Konfiguration
       - PORT=5000
       - SYNC_STATE_DB=/data/sync_state.sqlite
       - CONFIG_PATH=config.yaml

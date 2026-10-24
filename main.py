@@ -105,17 +105,28 @@ def run_full_sync(dry_run=False):
             ct_id = int(l["ct_id"]) if l["ct_id"].isdigit() else None
             wt_id = l["wt_id"]
             if ct_id and cal_id:
+                is_dead_link = False
                 try:
                     s_res = setlist_domain.sync_service_setlist(ct_id, wt_id, cal_id, dry_run=dry_run)
                     setlists_res.append(s_res)
                 except Exception as e:
-                    setlists_res.append({"ct_event_id": ct_id, "error": str(e)})
+                    err_msg = str(e)
+                    setlists_res.append({"ct_event_id": ct_id, "error": err_msg})
+                    if "404" in err_msg or "Not Found" in err_msg:
+                        is_dead_link = True
 
                 try:
                     t_res = team_domain.sync_service_team(ct_id, wt_id, dry_run=dry_run)
                     teams_res.append(t_res)
                 except Exception as e:
-                    teams_res.append({"ct_event_id": ct_id, "error": str(e)})
+                    err_msg = str(e)
+                    teams_res.append({"ct_event_id": ct_id, "error": err_msg})
+                    if "404" in err_msg or "Not Found" in err_msg:
+                        is_dead_link = True
+
+                if is_dead_link:
+                    state.mark_deleted("service", str(l["ct_id"]), wt_id)
+                    logging.info(f"Marked deleted/stale service link as inactive: ct_id={l['ct_id']}, wt_id={wt_id}")
 
         finished_at = datetime.now(ZoneInfo("UTC")).isoformat()
         summary = {

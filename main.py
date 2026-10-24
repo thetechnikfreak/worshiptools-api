@@ -168,7 +168,7 @@ def upload_file_endpoint():
         return jsonify({"success": False, "error": "No selected file"}), 400
 
     filename = uploaded.filename
-    is_presentation = filename.lower().endswith((".pptx", ".ppt"))
+    is_presentation = filename.lower().endswith((".pptx", ".ppt", ".pdf"))
     is_image = filename.lower().endswith((".jpg", ".jpeg", ".png"))
     is_media = request.form.get("media") == "1" or is_image or is_presentation
 
@@ -249,7 +249,7 @@ def upload_urls_endpoint():
             resp.raise_for_status()
             content = resp.content
 
-            if name.lower().endswith((".pptx", ".ppt")):
+            if name.lower().endswith((".pptx", ".ppt", ".pdf")):
                 info = wt_api.upload_media_presentation(name=name, pptx_bytes=content)
                 results.append({"name": name, "type": "presentation", **info})
             elif name.lower().endswith((".jpg", ".jpeg", ".png")):
@@ -339,6 +339,16 @@ def get_churchtools_services():
             event_type = apt.get("title") or ev.get("name") or "Gottesdienst"
             start_date = ev.get("startDate")
 
+            # Skip services that started in the past (YouTube & live streaming require future dates)
+            future_only = request.args.get("future_only", "1") == "1" and request.args.get("past") != "1"
+            if future_only and start_date:
+                try:
+                    ev_dt = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+                    if ev_dt < now:
+                        continue
+                except Exception:
+                    pass
+
             seen_key = f"ct:{ev_id}:{subtitle}"
             legacy_key = f"ct:{ev_id}:{subtitle}:{start_date}"
             if not force_all and (state.is_seen("ct_new_services", seen_key) or state.is_seen("ct_new_services", legacy_key)):
@@ -417,6 +427,20 @@ def get_worshiptools_services():
                 continue
 
             start_date = times[0]
+
+            # Skip services that started in the past (YouTube & live streaming require future dates)
+            future_only = request.args.get("future_only", "1") == "1" and request.args.get("past") != "1"
+            if future_only and start_date:
+                try:
+                    wt_dt = datetime.fromisoformat(start_date)
+                    if wt_dt.tzinfo is None:
+                        if wt_dt < datetime.now():
+                            continue
+                    elif wt_dt < now:
+                        continue
+                except Exception:
+                    pass
+
             seen_key = f"wt:{wt_id}:{name}"
             legacy_key = f"wt:{wt_id}:{name}:{start_date}"
             if not force_all and (state.is_seen("wt_new_services", seen_key) or state.is_seen("wt_new_services", legacy_key)):

@@ -427,21 +427,51 @@ class Worshiptools_API:
 
     def upload_media_presentation(self, name: str, pptx_bytes: bytes, media_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Uploads a PowerPoint presentation (.pptx) to WorshipTools Presenter:
-        1. Exports slide images (full JPEG + 600px thumbnail) using PowerPoint COM or fallback renderer.
-        2. Uploads the .pptx file and slide images directly to Firebase Storage bucket 'we-data' under accounts/{account_id}/slides/{presentation_id}/
-        3. Registers the document in Firestore 'accounts/{account_id}/slides/{presentation_id}' (Presenter 2026 native schema).
-        4. Also registers document in 'accounts/{account_id}/media/{presentation_id}' for backward compatibility.
-        5. Caches to local WorshipTools Library directory if present on the host.
+        Uploads a PowerPoint presentation (.pptx) or PDF presentation (.pdf) to WorshipTools Presenter:
+        1. If PDF: Uses pdftoppm directly for 100% pixel-perfect vector and font rendering (Canva PDF).
+        2. If PPTX: Uses PowerPoint COM (Windows) or LibreOffice headless + pdftoppm (Linux).
+        3. Uploads presentation file and slide images to Firebase Storage under accounts/{account_id}/slides/{presentation_id}/
+        4. Registers in Firestore 'accounts/{account_id}/slides/{presentation_id}'.
         """
         import io, zipfile, tempfile, shutil, urllib.parse, subprocess, glob, logging
         from PIL import Image
 
         presentation_id = media_id or str(uuid.uuid4())
         slide_images = []  # list of (bytes, width, height)
+        is_pdf = name.lower().endswith(".pdf") or pptx_bytes.startswith(b"%PDF-")
 
-        # 1. Try PowerPoint COM on Windows
-        if os.name == "nt":
+        # 1. Native PDF rendering (Pixel-perfect Canva rendering without font substitution)
+        if is_pdf:
+            pdftoppm = shutil.which("pdftoppm")
+            if pdftoppm:
+                temp_dir = tempfile.mkdtemp()
+                try:
+                    temp_pdf = os.path.join(temp_dir, "input.pdf")
+                    with open(temp_pdf, "wb") as f:
+                        f.write(pptx_bytes)
+
+                    slide_prefix = os.path.join(temp_dir, "slide")
+                    cmd_img = [pdftoppm, "-jpeg", "-r", "150", temp_pdf, slide_prefix]
+                    subprocess.run(cmd_img, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+
+                    img_files = sorted(
+                        glob.glob(os.path.join(temp_dir, "slide-*.jpg")),
+                        key=lambda x: int("".join(c for c in os.path.basename(x) if c.isdigit()) or "0")
+                    )
+                    for f in img_files:
+                        with open(f, "rb") as fp:
+                            b = fp.read()
+                        with Image.open(io.BytesIO(b)) as im:
+                            w, h = im.size
+                        slide_images.append((b, w, h))
+                except Exception as e:
+                    logging.warning(f"pdftoppm PDF export error: {e}")
+                finally:
+                    try: shutil.rmtree(temp_dir)
+                    except: pass
+
+        # 2. Try PowerPoint COM on Windows (for PPTX)
+        if not slide_images and os.name == "nt" and not is_pdf:
             try:
                 import win32com.client
                 temp_pptx = tempfile.NamedTemporaryFile(suffix=".pptx", delete=False)
@@ -474,20 +504,21 @@ class Worshiptools_API:
             except Exception:
                 pass
 
-        # 2. Try LibreOffice headless + pdftoppm (Linux / Docker / macOS / Windows with LibreOffice)
+        # 3. Try LibreOffice headless + pdftoppm (Linux / Docker / macOS / Windows with LibreOffice)
         if not slide_images:
             soffice = shutil.which("soffice") or shutil.which("libreoffice")
             pdftoppm = shutil.which("pdftoppm")
             if soffice and pdftoppm:
                 try:
                     temp_dir = tempfile.mkdtemp()
-                    temp_pptx = os.path.join(temp_dir, "input.pptx")
-                    with open(temp_pptx, "wb") as f:
+                    temp_in = os.path.join(temp_dir, "input.pdf" if is_pdf else "input.pptx")
+                    with open(temp_in, "wb") as f:
                         f.write(pptx_bytes)
 
-                    cmd_pdf = [soffice, "--headless", "--convert-to", "pdf", "--outdir", temp_dir, temp_pptx]
-                    subprocess.run(cmd_pdf, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
-                    temp_pdf = os.path.join(temp_dir, "input.pdf")
+                    temp_pdf = temp_in if is_pdf else os.path.join(temp_dir, "input.pdf")
+                    if not is_pdf:
+                        cmd_pdf = [soffice, "--headless", "--convert-to", "pdf", "--outdir", temp_dir, temp_in]
+                        subprocess.run(cmd_pdf, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
 
                     if os.path.exists(temp_pdf):
                         slide_prefix = os.path.join(temp_dir, "slide")
@@ -505,7 +536,7 @@ class Worshiptools_API:
                                 w, h = im.size
                             slide_images.append((b, w, h))
                 except Exception as e:
-                    logging.warning(f"LibreOffice slide export error: {e}")
+                    logging.warning(f"Slide export error: {e}")
                 finally:
                     try: shutil.rmtree(temp_dir)
                     except: pass
@@ -530,11 +561,12 @@ class Worshiptools_API:
         headers = {"Authorization": f"Firebase {fb_token}"}
         encoded_filename = urllib.parse.quote(name, safe="")
 
-        # 3. Upload .pptx to Firebase Storage
+        # 3. Upload presentation file (.pptx or .pdf) to Firebase Storage
+        file_mime = "application/pdf" if is_pdf else "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         pptx_storage_url = f"https://firebasestorage.googleapis.com/v0/b/we-data/o?name=accounts/{self.account_id}/slides/{presentation_id}/{encoded_filename}"
         r_ppt = requests.post(
             pptx_storage_url,
-            headers={**headers, "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+            headers={**headers, "Content-Type": file_mime},
             data=pptx_bytes
         )
         if r_ppt.status_code == 401:
@@ -542,7 +574,7 @@ class Worshiptools_API:
             headers = {"Authorization": f"Firebase {fb_token}"}
             r_ppt = requests.post(
                 pptx_storage_url,
-                headers={**headers, "Content-Type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+                headers={**headers, "Content-Type": file_mime},
                 data=pptx_bytes
             )
         r_ppt.raise_for_status()

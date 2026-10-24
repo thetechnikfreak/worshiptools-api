@@ -2,13 +2,21 @@ FROM python:3.13-slim
 
 WORKDIR /app
 
-# Install system dependencies for headless PowerPoint slide rendering on Linux
+# Install system dependencies for headless PowerPoint & PDF slide rendering on Linux
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-impress \
     libreoffice-common \
     poppler-utils \
     fonts-dejavu-core \
     fonts-liberation \
+    fonts-noto-core \
+    fonts-roboto \
+    fonts-open-sans \
+    fonts-montserrat \
+    fonts-lato \
+    fonts-raleway \
+    fontconfig \
+    && fc-cache -fv \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching

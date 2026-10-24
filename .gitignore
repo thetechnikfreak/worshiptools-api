@@ -21,3 +21,8 @@ data/
 # Temp files
 *.log
 *.tmp
+# Local custom tools, personal files & workflows
+local/
+custom/
+examples/
+*.bak

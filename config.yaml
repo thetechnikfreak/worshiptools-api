@@ -1,0 +1,33 @@
+churchtools:
+  calendar: Gottesdienst
+  sync_days_ahead: 60
+  sync_timezone: Europe/Berlin
+
+service_types:
+  Gottesdienst: Gottesdienst
+  Atempause: Gottesdienst
+  Hilft Ja Nix: Hilft Ja Nix
+  Fireabend: Gottesdienst
+  KIBIWO: Gottesdienst
+
+default_template: Gottesdienst
+
+sync:
+  tie_window_seconds: 60
+  delete_mode: "off"  # options: "off", "ct_only", "both" (safe default: WT deletes stay off initially)
+  max_deletes_per_run: 3
+  missing_runs_before_delete: 2
+  interval_seconds: 120
+
+role_map:
+  # CT Service Name: WT Role Name
+  Predigt: Prediger
+  Moderation: Moderation
+  Ton: Tontechnik
+  Licht: Lighting
+  Video: Stream
+  Band: Musik allgemein
+  Orgel: Piano
+
+people_map: {}
+

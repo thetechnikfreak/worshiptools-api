@@ -1,0 +1,36 @@
+churchtools:
+  calendar: "Gottesdienst"      # Name des Ziel-Kalenders in ChurchTools
+  sync_days_ahead: 60           # Synchronisations-Zeitraum in Tagen
+  sync_timezone: Europe/Berlin
+
+# Zuordnung der Service-Typen zwischen ChurchTools und WorshipTools
+# Format: "ChurchTools Event-Titel": "WorshipTools Service-Typ"
+service_types:
+  "Gottesdienst": "Gottesdienst"
+  "Abendgottesdienst": "Abendgottesdienst"
+  "Familiengottesdienst": "Familiengottesdienst"
+  "Jugendgottesdienst": "Jugendgottesdienst"
+
+default_template: "Gottesdienst"
+
+sync:
+  interval_seconds: 120        # Hintergrund-Sync alle 2 Minuten
+  tie_window_seconds: 60       # Zeitfenster bei gleichzeitigen Änderungen (CT hat Vorrang)
+  delete_mode: "off"           # Optionen: "off" (sicher), "ct_only", "both"
+  max_deletes_per_run: 3
+  missing_runs_before_delete: 2
+
+# Zuordnung von Diensten aus ChurchTools zu Rollen in WorshipTools
+# Format: "ChurchTools Dienstname": "WorshipTools Rollenname"
+role_map:
+  "Predigt": "Prediger"
+  "Moderation": "Moderation"
+  "Leitung": "Leitung"
+  "Ton": "Tontechnik"
+  "Licht": "Lichttechnik"
+  "Video": "Stream"
+  "Klavier": "Piano"
+  "Orgel": "Piano"
+  "Band": "Musik allgemein"
+
+people_map: {}

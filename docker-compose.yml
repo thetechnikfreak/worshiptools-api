@@ -1,0 +1,20 @@
+services:
+  worshiptools-api:
+    build: .
+    container_name: worshiptools-api
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      - PORT=5000
+      - SYNC_STATE_DB=/data/sync_state.sqlite
+      - CONFIG_PATH=config.yaml
+    volumes:
+      - sync-data:/data
+      - ./config.yaml:/app/config.yaml:ro
+
+volumes:
+  sync-data:
+    driver: local

@@ -135,7 +135,11 @@ class Worshiptools_API:
             else:
                 raise ValueError("Re-authentication failed")
 
+        if response.status_code == 204:
+            return None
         response.raise_for_status()
+        if not response.content:
+            return None
         return response.json()
 
     def _request_root(self, method, endpoint, **kwargs):
@@ -154,19 +158,28 @@ class Worshiptools_API:
             else:
                 raise ValueError("Re-authentication failed")
 
+        if response.status_code == 204:
+            return None
         response.raise_for_status()
+        if not response.content:
+            return None
         return response.json()
 
     def get(self, endpoint, params=None):
         return self._request("GET", endpoint, params=params)
 
-    def post(self, endpoint, files=None, data=None, json_data=None):
+    def post(self, endpoint, files=None, data=None, json=None, json_data=None):
+        payload = json if json is not None else json_data
         if files:
             return self._request("POST", endpoint, files=files, data=data)
-        elif json_data:
-            return self._request("POST", endpoint, json=json_data, headers={"Content-Type": "application/json"})
-        else:
+        elif payload is not None:
+            return self._request("POST", endpoint, json=payload, headers={"Content-Type": "application/json"})
+        elif data:
             return self._request("POST", endpoint, data=data)
+        return self._request("POST", endpoint)
+
+    def delete(self, endpoint):
+        return self._request("DELETE", endpoint)
 
     def get_firebase_id_token(self, force_refresh=False):
         """

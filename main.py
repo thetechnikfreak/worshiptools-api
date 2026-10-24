@@ -339,9 +339,13 @@ def get_churchtools_services():
             event_type = apt.get("title") or ev.get("name") or "Gottesdienst"
             start_date = ev.get("startDate")
 
-            seen_key = f"ct:{ev_id}:{subtitle}:{start_date}"
-            if not force_all and state.is_seen("ct_new_services", seen_key):
+            seen_key = f"ct:{ev_id}:{subtitle}"
+            legacy_key = f"ct:{ev_id}:{subtitle}:{start_date}"
+            if not force_all and (state.is_seen("ct_new_services", seen_key) or state.is_seen("ct_new_services", legacy_key)):
                 continue
+
+            # Check if this service was seen before with an empty or different subtitle
+            was_seen_empty = state.is_seen("ct_new_services", f"ct:{ev_id}:") or state.is_seen("ct_new_services", f"ct:{ev_id}::{start_date}")
 
             item = {
                 "id": ev_id,
@@ -351,6 +355,7 @@ def get_churchtools_services():
                 "subtitle": subtitle,
                 "name": subtitle,
                 "has_subtitle": has_sub,
+                "is_subtitle_update": bool(has_sub and was_seen_empty),
                 "date": [start_date],
                 "source": "churchtools"
             }
@@ -358,6 +363,7 @@ def get_churchtools_services():
 
             if not force_all:
                 state.mark_seen("ct_new_services", seen_key)
+                state.mark_seen("ct_new_services", legacy_key)
 
         return jsonify({
             "success": True,
@@ -411,9 +417,12 @@ def get_worshiptools_services():
                 continue
 
             start_date = times[0]
-            seen_key = f"wt:{wt_id}:{name}:{start_date}"
-            if not force_all and state.is_seen("wt_new_services", seen_key):
+            seen_key = f"wt:{wt_id}:{name}"
+            legacy_key = f"wt:{wt_id}:{name}:{start_date}"
+            if not force_all and (state.is_seen("wt_new_services", seen_key) or state.is_seen("wt_new_services", legacy_key)):
                 continue
+
+            was_seen_empty = state.is_seen("wt_new_services", f"wt:{wt_id}:") or state.is_seen("wt_new_services", f"wt:{wt_id}::{start_date}")
 
             item = {
                 "id": wt_id,
@@ -422,6 +431,7 @@ def get_worshiptools_services():
                 "subtitle": name,
                 "name": name,
                 "has_subtitle": has_sub,
+                "is_subtitle_update": bool(has_sub and was_seen_empty),
                 "date": times,
                 "source": "worshiptools"
             }
@@ -429,6 +439,7 @@ def get_worshiptools_services():
 
             if not force_all:
                 state.mark_seen("wt_new_services", seen_key)
+                state.mark_seen("wt_new_services", legacy_key)
 
         return jsonify({
             "success": True,

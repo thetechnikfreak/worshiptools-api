@@ -28,9 +28,6 @@ services:
       - SYNC_STATE_DB=/data/sync_state.sqlite
       - CONFIG_PATH=config.yaml
     volumes:
-      - sync-data:/data
+      # Dauerhafter Speicher für die SQLite-Datenbank direkt auf dem Host
+      - ./data:/data
       - ./config.yaml:/app/config.yaml:ro
-
-volumes:
-  sync-data:
-    driver: local

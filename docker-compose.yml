@@ -30,4 +30,3 @@ services:
     volumes:
       # Dauerhafter Speicher für die SQLite-Datenbank direkt auf dem Host
       - ./data:/data
-      - ./config.yaml:/app/config.yaml:ro

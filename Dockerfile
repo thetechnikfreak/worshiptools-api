@@ -12,9 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-core \
     fonts-roboto \
     fonts-open-sans \
-    fonts-montserrat \
     fonts-lato \
-    fonts-raleway \
     fontconfig \
     && fc-cache -fv \
     && rm -rf /var/lib/apt/lists/*

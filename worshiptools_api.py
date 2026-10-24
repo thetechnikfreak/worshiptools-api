@@ -712,52 +712,7 @@ class Worshiptools_API:
         )
         fs_r.raise_for_status()
 
-        # 6. Also register in accounts/{account_id}/media/{presentation_id}
-        media_doc_payload = {
-            "fields": {
-                "name": {"stringValue": name},
-                "mod": {"timestampValue": now_iso},
-                "post": {"timestampValue": now_iso},
-                "client": {
-                    "mapValue": {
-                        "fields": {
-                            "id": {"stringValue": "1042a211-c45c-4ff3-a2e7-58a3f5fc8508"},
-                            "name": {"stringValue": "Presenter 2026.1.9"}
-                        }
-                    }
-                },
-                "user": {
-                    "mapValue": {
-                        "fields": {
-                            "id": {"stringValue": "8b157fb1-05e0-4110-81ba-5d0327b84a13"},
-                            "name": {"stringValue": "Paul"}
-                        }
-                    }
-                },
-                "data": {
-                    "mapValue": {
-                        "fields": {
-                            "cloudKey": {"stringValue": f"{presentation_id}.pptx"},
-                            "duration": {"integerValue": str(len(slide_images))},
-                            "width": {"integerValue": str(max_w)},
-                            "height": {"integerValue": str(max_h)},
-                            "size": {"integerValue": str(len(pptx_bytes))},
-                            "type": {"stringValue": "p"},
-                            "store": {"booleanValue": False},
-                            "tags": {"arrayValue": {}}
-                        }
-                    }
-                }
-            }
-        }
-        media_fs_url = f"{self.firestore_base_url}/accounts/{self.account_id}/media/{presentation_id}"
-        requests.patch(
-            media_fs_url,
-            headers={"Authorization": f"Bearer {fb_token}", "Content-Type": "application/json"},
-            json=media_doc_payload
-        )
-
-        # 7. Optional local cache sync
+        # 6. Optional local cache sync
         appdata = os.environ.get("APPDATA")
         if appdata:
             local_dir = os.path.join(appdata, "WorshipTools Library", self.account_id)

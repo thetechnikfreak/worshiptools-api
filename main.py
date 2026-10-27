@@ -498,6 +498,58 @@ def get_new_services():
         return get_worshiptools_services()
     return get_churchtools_services()
 
+@app.route("/api/state/seen", methods=["DELETE", "POST"])
+def delete_state_seen():
+    """
+    Remove seen records from the database so services/items trigger again.
+    Params:
+      ?id=62 (deletes any key matching :62: or ending in :62)
+      ?key=ct:62:... (exact or pattern)
+      ?namespace=ct_new_services | wt_new_services
+      ?all=1 (clears entire namespace)
+    """
+    if not check_auth():
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    ns = request.args.get("namespace") or None
+    item_id = request.args.get("id") or None
+    key = request.args.get("key") or None
+    clear_all = request.args.get("all") == "1"
+
+    if clear_all:
+        count = state.delete_seen(namespace=ns)
+    elif item_id:
+        count = state.delete_seen(namespace=ns, key_pattern=f"%:{item_id}:%")
+        count += state.delete_seen(namespace=ns, key_pattern=f"%:{item_id}")
+    elif key:
+        count = state.delete_seen(namespace=ns, key_pattern=key)
+    else:
+        return jsonify({"success": False, "error": "Provide ?id=..., ?key=..., or ?all=1"}), 400
+
+    return jsonify({"success": True, "deleted_count": count})
+
+@app.route("/api/state/link", methods=["DELETE", "POST"])
+def delete_state_link():
+    """
+    Remove a linked item (service or song) from the database so it can be re-linked.
+    Params:
+      ?domain=service | song (default: service)
+      ?ct_id=...
+      ?wt_id=...
+    """
+    if not check_auth():
+        return jsonify({"success": False, "error": "Unauthorized"}), 401
+
+    domain = request.args.get("domain", "service")
+    ct_id = request.args.get("ct_id") or None
+    wt_id = request.args.get("wt_id") or None
+
+    if not ct_id and not wt_id:
+        return jsonify({"success": False, "error": "Provide ?ct_id=... or ?wt_id=..."}), 400
+
+    count = state.delete_link_permanently(domain=domain, ct_id=ct_id, wt_id=wt_id)
+    return jsonify({"success": True, "deleted_count": count})
+
 def _background_loop():
     while True:
         try:

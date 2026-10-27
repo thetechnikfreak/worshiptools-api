@@ -168,3 +168,36 @@ class SyncState:
         with self._get_conn() as conn:
             cur = conn.execute("SELECT key FROM seen WHERE namespace = ?", (namespace,))
             return [row["key"] for row in cur.fetchall()]
+
+    def delete_seen(self, namespace: Optional[str] = None, key_pattern: Optional[str] = None) -> int:
+        """Deletes seen records matching namespace and/or key pattern (supports LIKE %pattern%)."""
+        with self._get_conn() as conn:
+            query = "DELETE FROM seen WHERE 1=1"
+            params = []
+            if namespace:
+                query += " AND namespace = ?"
+                params.append(namespace)
+            if key_pattern:
+                if "%" in key_pattern:
+                    query += " AND key LIKE ?"
+                else:
+                    query += " AND key = ?"
+                params.append(key_pattern)
+            cur = conn.execute(query, tuple(params))
+            conn.commit()
+            return cur.rowcount
+
+    def delete_link_permanently(self, domain: str, ct_id: Optional[str] = None, wt_id: Optional[str] = None) -> int:
+        """Completely removes a link from the links table."""
+        with self._get_conn() as conn:
+            query = "DELETE FROM links WHERE domain = ?"
+            params = [domain]
+            if ct_id:
+                query += " AND ct_id = ?"
+                params.append(str(ct_id))
+            if wt_id:
+                query += " AND wt_id = ?"
+                params.append(str(wt_id))
+            cur = conn.execute(query, tuple(params))
+            conn.commit()
+            return cur.rowcount

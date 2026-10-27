@@ -15,6 +15,18 @@ class SetlistSyncDomain:
 
     def sync_service_setlist(self, ct_event_id: int, wt_service_id: str, calendar_id: int, dry_run: bool = False) -> Dict[str, Any]:
         """Reads songs from WT service cues and updates CT event agenda."""
+        # Check if agenda in ChurchTools is locked or finalized by user
+        existing_agenda = self.ct.get_agenda(ct_event_id)
+        if existing_agenda and (existing_agenda.get("isLocked") or existing_agenda.get("isFinal")):
+            logger.info(f"Agenda for CT event {ct_event_id} is locked/finalized in ChurchTools. Skipping overwrite.")
+            return {
+                "status": "skipped",
+                "reason": "agenda_locked_in_churchtools",
+                "ct_event_id": ct_event_id,
+                "wt_service_id": wt_service_id,
+                "items_count": len(existing_agenda.get("items", []))
+            }
+
         doc = self.wt.get_firestore_document(f"cuelists/{wt_service_id}")
         data_fields = doc.get("fields", {}).get("data", {}).get("mapValue", {}).get("fields", {})
         cues = data_fields.get("cues", {}).get("arrayValue", {}).get("values", [])
@@ -101,7 +113,17 @@ class SetlistSyncDomain:
             return {"status": "no_cues", "items_count": 0}
 
         if not dry_run:
-            self.ct.set_agenda(event_id=ct_event_id, calendar_id=calendar_id, items=agenda_items)
+            try:
+                self.ct.set_agenda(event_id=ct_event_id, calendar_id=calendar_id, items=agenda_items)
+            except requests.HTTPError as e:
+                if e.response is not None and e.response.status_code == 403:
+                    return {
+                        "status": "skipped",
+                        "reason": "agenda_locked_or_forbidden",
+                        "ct_event_id": ct_event_id,
+                        "wt_service_id": wt_service_id
+                    }
+                raise
 
         return {
             "status": "synced",
